@@ -1,11 +1,11 @@
 // backend/src/main.rs
 
-//! Entry point: set up logging, open a network port, serve the app.
-
-use std::net::SocketAddr;
+//! Entry point: set up logging, load configuration, open a network port, serve the app.
 
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
+
+use quoteflow::config::Config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,9 +16,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // Hard-coded for now; moves to configuration (environment variables) in Step 1.6.
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    // Configuration from environment variables (APP_HOST, APP_PORT), with defaults.
+    // Loaded after logging so a bad value is reported clearly before exiting.
+    let config = Config::from_env().unwrap_or_else(|err| {
+        tracing::error!("configuration error: {err}");
+        std::process::exit(1);
+    });
+    let addr = config.socket_addr();
     let listener = TcpListener::bind(addr).await?;
+
     tracing::info!("QuoteFlow API listening on http://{addr}");
 
     axum::serve(listener, quoteflow::build_app())
