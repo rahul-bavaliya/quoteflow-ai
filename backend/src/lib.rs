@@ -6,6 +6,7 @@
 //! integration tests can build the exact same application without a network.
 
 pub mod api;
+pub mod config;
 
 use axum::Router;
 
