@@ -5,13 +5,26 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-const DEFAULT_HOST: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED); // 0.0.0.0
-const DEFAULT_PORT: u16 = 3000;
+const DEFAULT_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST); // 127.0.0.1: private by default
+const DEFAULT_PORT: u16 = 8080;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub host: IpAddr,
     pub port: u16,
+    /// Contains the database password: never log or print this.
+    pub database_url: String,
+}
+
+// Hand-written so the database password can never appear in logs.
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database_url", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,7 +63,13 @@ impl Config {
             None => DEFAULT_PORT,
         };
 
-        Ok(Self { host, port })
+        let database_url = parse_database_url(lookup("DATABASE_URL"))?;
+
+        Ok(Self {
+            host,
+            port,
+            database_url,
+        })
     }
 
     pub fn socket_addr(&self) -> SocketAddr {
@@ -85,10 +104,30 @@ fn parse_port(value: String) -> Result<u16, ConfigError> {
     }
 }
 
+/// Required, no default. The format is checked by SQLx when connecting,
+/// not here, because ConfigError prints the value and would leak the password.
+fn parse_database_url(value: Option<String>) -> Result<String, ConfigError> {
+    match value {
+        Some(url) if !url.trim().is_empty() => Ok(url),
+        Some(url) => Err(ConfigError {
+            key: "DATABASE_URL",
+            reason: "must not be empty".into(),
+            value: url,
+        }),
+        None => Err(ConfigError {
+            key: "DATABASE_URL",
+            reason: "is required".into(),
+            value: String::new(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    const TEST_DB_URL: &str = "postgres://user:secret@127.0.0.1:5432/test_db";
 
     /// Build a fake environment from key/value pairs.
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -100,17 +139,21 @@ mod tests {
     }
 
     #[test]
-    fn uses_defaults_when_nothing_is_set() {
-        let config = Config::from_lookup(env(&[])).unwrap();
-        assert_eq!(config.host, DEFAULT_HOST);
-        assert_eq!(config.port, DEFAULT_PORT);
+    fn uses_defaults_when_only_database_url_is_set() {
+        let config = Config::from_lookup(env(&[("DATABASE_URL", TEST_DB_URL)])).unwrap();
+        assert_eq!(config.socket_addr().to_string(), "127.0.0.1:8080");
+        assert_eq!(config.database_url, TEST_DB_URL);
     }
 
     #[test]
     fn reads_host_and_port() {
-        let config =
-            Config::from_lookup(env(&[("APP_HOST", "127.0.0.1"), ("APP_PORT", "8080")])).unwrap();
-        assert_eq!(config.socket_addr().to_string(), "127.0.0.1:8080");
+        let config = Config::from_lookup(env(&[
+            ("APP_HOST", "0.0.0.0"),
+            ("APP_PORT", "9090"),
+            ("DATABASE_URL", TEST_DB_URL),
+        ]))
+        .unwrap();
+        assert_eq!(config.socket_addr().to_string(), "0.0.0.0:9090");
     }
 
     #[test]
@@ -135,5 +178,25 @@ mod tests {
     fn rejects_invalid_host() {
         let err = Config::from_lookup(env(&[("APP_HOST", "not-an-ip")])).unwrap_err();
         assert_eq!(err.key, "APP_HOST");
+    }
+
+    #[test]
+    fn requires_database_url() {
+        let err = Config::from_lookup(env(&[])).unwrap_err();
+        assert_eq!(err.key, "DATABASE_URL");
+    }
+
+    #[test]
+    fn rejects_empty_database_url() {
+        let err = Config::from_lookup(env(&[("DATABASE_URL", "   ")])).unwrap_err();
+        assert_eq!(err.key, "DATABASE_URL");
+    }
+
+    #[test]
+    fn debug_output_hides_database_password() {
+        let config = Config::from_lookup(env(&[("DATABASE_URL", TEST_DB_URL)])).unwrap();
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("secret"), "password leaked: {printed}");
+        assert!(printed.contains("<redacted>"));
     }
 }
