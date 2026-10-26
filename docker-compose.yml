@@ -1,0 +1,23 @@
+# ./docker-compose.yml
+
+# Local development services for QuoteFlow AI.
+# Start: docker compose up -d      Stop: docker compose stop
+services:
+  postgres:
+    image: postgres:18          # pinned major version; gets 18.x security fixes
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}         # values come from the .env file
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5432:5432"   # only reachable from inside this machine
+    volumes:
+      - pgdata:/var/lib/postgresql   # keeps data when the container restarts
+    healthcheck:                # lets Docker report "healthy" when the DB accepts connections
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
